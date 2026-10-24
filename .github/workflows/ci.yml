@@ -19,7 +19,11 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install
-        run: pip install -e ".[dev]"
+        # into .venv, where pyright is configured to look (pyproject.toml), like a local checkout
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev]"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Never mainnet
         run: python scripts/check_mainnet.py
       - name: Lint and format

@@ -1,0 +1,10 @@
+# Secret scanning (CI runs gitleaks over the whole history on every push).
+# The default rules, plus one exception: the config tests use an obviously fake connection string
+# ("mongodb+srv://user:hunter2@cluster.example/") to check that secrets never reach a printed setting.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake credentials in tests"
+paths = ['''tests/test_config\.py''']
