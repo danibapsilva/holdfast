@@ -11,7 +11,7 @@ from holdfast.money import ETH, Token, format_amount, parse_amount, tusd
 from holdfast.service import DEMO_USER, EscrowService, NotFound, Policy
 from holdfast.store import Conflict, MemoryStore, Store
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "DEMO_USER",

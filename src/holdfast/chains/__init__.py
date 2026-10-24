@@ -15,11 +15,19 @@ from holdfast.money import Token
 
 
 class ChainError(HoldfastError):
-    """The network refused or failed: a send reverted, an RPC was down, an address was bad."""
+    """The network refused or failed: a send reverted, or an RPC was down."""
+
+
+class BadAddress(ChainError):
+    """Text that isn't an address on this network: the caller's mistake, not the network's."""
 
 
 class Chain(Protocol):
     name: str
+
+    def network_id(self) -> int:
+        """The chain id the connected network reports (what the guards check)."""
+        ...
 
     def check_network(self) -> None:
         """Raise `WrongNetwork` unless the connected network is an allowlisted test network."""

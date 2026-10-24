@@ -124,6 +124,28 @@ service.confirm_delivery(deal.id, "bob")  # releases to alice's payout address
 
 Every deliberate error is a `HoldfastError` whose message is safe to show the person who acted.
 
+## The HTTP API
+
+`holdfast-api` is the web playground's backend: a visitor starts a deal against the demo bot and plays it
+through. There are no accounts. Starting a deal returns a random token, and the visitor's id in the deal is
+a hash of it, so the server stores no sessions and a deal is only visible to the token that made it.
+
+| Route | What it does |
+| --- | --- |
+| `POST /demo/deals` | Start a deal against the demo bot as the buyer or the seller; returns the token |
+| `GET /deals/{id}` | The deal as you see it: state, amounts, deposit address, payments and their confirmations, the log, and the actions open to you now |
+| `POST /deals/{id}/pay` | The demo pays for you (you're the buyer): test tokens, minted on Sepolia |
+| `POST /deals/{id}/deliver`, `/confirm`, `/refund`, `/cancel` | Move the trade along |
+| `POST /deals/{id}/dispute`, `/respond` | Open a dispute, or answer one |
+| `POST /deals/{id}/payout-address`, `/refund-address` | Where the money goes |
+| `GET /health` | The network, chain id, latest block, tUSD and treasury addresses |
+
+Every refusal comes back as `{"error": "..."}` with a status that says why (403 not your role, 409 not now,
+422 bad input, 429 slow down, 502 the test network failed). Amounts come as base units and display text,
+and every address and transaction comes with its Etherscan link. Requests are rate limited per IP, and each
+IP can hold a few open demo deals at a time. `holdfast-worker` is the watcher that confirms payments,
+expires deadlines, settles disputes on their timer, and pays out.
+
 ## Project layout
 
 ```text
@@ -135,12 +157,16 @@ src/holdfast/
   guards.py        the network allowlist and the caps
   config.py        settings from the environment (secrets are read here and nowhere else)
   errors.py        HoldfastError, the family every deliberate error belongs to
+  worker.py        the watcher loop, with backoff when the network fails
+  cli.py           the holdfast-api and holdfast-worker programs
+  api/             the HTTP API: routes, visitor tokens, rate limits, response models
   chains/
     __init__.py    the Chain interface
     hd.py          deposit and treasury keys from one seed
     sepolia.py     Sepolia via web3.py
     fake.py        an in-memory chain for tests and examples
 contracts/TestUSD.sol   the demo's dollar: 6 decimals, capped minting, a daily faucet
+deploy/                 hardened systemd units and the deployment guide
 examples/               runnable, narrated trades
 tests/                  1,100+ tests, including a real EVM (py-evm) with tUSD deployed
 docs/                   architecture and threat model
@@ -153,20 +179,24 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 python examples/demo_trade.py          # a trade, narrated
+holdfast-api --fake                    # the API offline on http://127.0.0.1:8710 (docs at /docs),
+                                       # on an in-memory chain that mines a block every 3 seconds
 python scripts/compile_contract.py     # compiles tUSD (downloads solc 0.8.24 once)
-pytest --cov                           # 1,100+ tests, about 2 seconds
+pytest --cov                           # 1,100+ tests, a few seconds
 ruff check . && pyright                # lint and strict type checking
 python scripts/check_mainnet.py        # fails if a mainnet RPC or chain id 1 appears anywhere
 ```
 
 The Sepolia adapter is tested against an in-process EVM set to Sepolia's chain id, with tUSD compiled and
 deployed, so payments, confirmations, gas top-ups, and sends all run without the internet. CI runs all of
-the above plus a secret scan on every push.
+the above plus a secret scan on every push. To run the demo yourself on Sepolia, follow
+[deploy/README.md](deploy/README.md).
 
 ## Status
 
 1. **Engine**: the state machine, service, Sepolia adapter, tUSD, tests, and CI. Done.
-2. **API and storage**: MongoDB, a small HTTP API, tUSD deployed to Sepolia, the watcher as a worker.
+2. **API and storage**: MongoDB, the HTTP API, the watcher, and hardened systemd units. Done; going live
+   on Sepolia (see [deploy/README.md](deploy/README.md)).
 3. **Web playground**: a chat on [danibapsilva.github.io](https://danibapsilva.github.io) that walks through
    a trade with the demo bot, every step a real Sepolia transaction you can open on Etherscan.
 4. **Discord bot**: the same engine, in a demo server.

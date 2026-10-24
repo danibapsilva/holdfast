@@ -10,7 +10,7 @@ import itertools
 import re
 from dataclasses import dataclass
 
-from holdfast.chains import ChainError
+from holdfast.chains import BadAddress, ChainError
 from holdfast.deal import Payment
 from holdfast.guards import SEPOLIA, require_testnet
 from holdfast.money import Token
@@ -54,6 +54,9 @@ class FakeChain:
 
     # ---- Chain ----
 
+    def network_id(self) -> int:
+        return self.chain_id
+
     def check_network(self) -> None:
         require_testnet(self.chain_id)
 
@@ -65,7 +68,7 @@ class FakeChain:
 
     def normalize_address(self, text: str) -> str:
         if not _ADDRESS.match(text.strip()):
-            raise ChainError(f"{text!r} isn't an address")
+            raise BadAddress(f"{text!r} isn't an address")
         return text.strip().lower()
 
     def head(self) -> int:

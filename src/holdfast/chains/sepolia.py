@@ -19,7 +19,7 @@ from web3 import Web3
 from web3.contract import Contract
 from web3.types import TxParams, TxReceipt, Wei
 
-from holdfast.chains import ChainError
+from holdfast.chains import BadAddress, ChainError
 from holdfast.chains.hd import HDWallet
 from holdfast.deal import Payment
 from holdfast.guards import ALLOWED_CHAIN_IDS, require_testnet
@@ -65,15 +65,18 @@ class SepoliaChain:
 
     # ---- network ----
 
+    def network_id(self) -> int:
+        return self.w3.eth.chain_id
+
     def check_network(self) -> None:
-        require_testnet(self.w3.eth.chain_id, self.allowed)
+        require_testnet(self.network_id(), self.allowed)
 
     def head(self) -> int:
         return self.w3.eth.block_number
 
     def normalize_address(self, text: str) -> str:
         if not Web3.is_address(text.strip()):
-            raise ChainError(f"{text!r} isn't an Ethereum address")
+            raise BadAddress(f"{text!r} isn't an Ethereum address")
         return Web3.to_checksum_address(text.strip())
 
     def deposit_address(self, index: int) -> str:

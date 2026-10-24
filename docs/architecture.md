@@ -107,3 +107,38 @@ Every deliberate error descends from `HoldfastError` (`errors.py`): deal rules (
 (`ChainError`), the guards (`GuardError`), storage conflicts (`Conflict`), settings (`ConfigError`), amounts
 (`AmountError`), and the seed (`SeedError`). Each message is written to be shown to the person who acted, so
 the API maps the family to a 4xx response and anything else to a logged 500.
+
+## The HTTP API
+
+`holdfast.api` is a thin FastAPI shell over `EscrowService`: every route checks the caller's rate, finds
+their deal, calls one use case, and returns the deal as they see it (`DealView`). Routes are plain `def`s, so
+FastAPI runs them in its thread pool and blocking chain calls never hold up other requests.
+
+- **Visitors, without accounts.** `POST /demo/deals` returns a random token (`secrets.token_urlsafe`). The
+  visitor's user id in the deal is `visitor-` plus a SHA-256 of the token, so the server stores no sessions,
+  a restart logs nobody out, and a copy of the database can't be used to act as a visitor. A deal you're not
+  part of answers 404, the same as one that doesn't exist.
+- **The actions offered** come from `TRANSITIONS` plus the deal's own extra conditions, so the playground
+  never shows a button the deal would refuse.
+- **Errors** map by type (`STATUS` in `api/app.py`): 401 no token, 403 not your role, 404, 409 not now or a
+  lost race, 422 bad input or over a cap, 429 rate limited, 502 the network failed, 503 the server points at
+  the wrong network. Anything else is logged with its traceback and answered with a generic 500.
+- **Limits.** A token bucket per IP, and a few open demo deals per IP, both in memory per process. They keep a
+  script from using up the demo's daily cap; the caps themselves are the real limit on money moving.
+- **Behind a proxy.** The API listens on 127.0.0.1 only. uvicorn trusts forwarded-for headers from
+  127.0.0.1, so behind Tailscale Funnel the limits see each visitor's real address.
+
+## The watcher
+
+`holdfast.worker.Worker` calls `EscrowService.tick` every few seconds: credit payments, expire deadlines,
+settle dispute timers, and pay out deals that are ready. A failing network backs off exponentially with
+jitter (up to two minutes); a save that lost a race with the API is simply retried on the next pass.
+SIGTERM stops it between passes. In production it's its own process (`holdfast-worker`); the offline
+playground (`holdfast-api --fake`) runs it in a thread and mines a block before each pass.
+
+## Storage
+
+`MongoStore` keeps three collections: `deals` (the deal's JSON form; `save` replaces it only where its
+`version` still matches, so a stale copy is refused), `transfers` (the unique `_id` of
+`<tx hash>:<log index>` is the double-credit guard), and `counters` (deal numbers, bumped atomically). One
+contract test suite runs against both `MemoryStore` and `MongoStore`.

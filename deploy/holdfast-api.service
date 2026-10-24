@@ -1,0 +1,38 @@
+# The Holdfast HTTP API, on 127.0.0.1:8710 only. Tailscale Funnel makes it public on port 8443.
+# Install: sudo cp deploy/holdfast-*.service /etc/systemd/system/ && sudo systemctl daemon-reload
+[Unit]
+Description=Holdfast API (Sepolia test network only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/holdfast
+EnvironmentFile=/home/ubuntu/.config/holdfast/holdfast.env
+ExecStart=/home/ubuntu/holdfast/.venv/bin/holdfast-api --host 127.0.0.1
+Restart=on-failure
+RestartSec=5
+
+# limits: a runaway can't starve the other services on this machine
+MemoryMax=400M
+CPUQuota=50%
+
+# hardening: read-only system, no new privileges, private /tmp, no access to other users' homes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/holdfast
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
