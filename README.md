@@ -1,11 +1,20 @@
-# Holdfast
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img src="docs/assets/logo-light.svg" alt="Holdfast" width="420">
+  </picture>
+</p>
 
-**A crypto escrow engine: two strangers trade, and neither has to trust the other.**
+<p align="center"><b>A crypto escrow engine: two strangers trade, and neither has to trust the other.</b></p>
 
-[![CI](https://github.com/danibapsilva/holdfast/actions/workflows/ci.yml/badge.svg)](https://github.com/danibapsilva/holdfast/actions/workflows/ci.yml)
-![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab)
-![Coverage 98%](https://img.shields.io/badge/coverage-98%25-2ea44f)
-[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-6e56cf)](LICENSE)
+<p align="center">
+  <a href="https://danibapsilva.github.io/holdfast/"><img src="https://img.shields.io/badge/live%20demo-try%20a%20trade-10b981" alt="Live demo"></a>
+  <a href="https://github.com/danibapsilva/holdfast/actions/workflows/ci.yml"><img src="https://github.com/danibapsilva/holdfast/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.12%2B-3776ab" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/coverage-98%25-2ea44f" alt="Coverage 98%">
+  <a href="https://sepolia.etherscan.io/address/0xD0841FE19d653C0F8E31Ba5c825f23D9ad3aa99b"><img src="https://img.shields.io/badge/tUSD-Sepolia-627eea" alt="tUSD on Sepolia"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-6e56cf" alt="License: PolyForm Noncommercial"></a>
+</p>
 
 > [!WARNING]
 > **Test networks only.** Holdfast runs on Ethereum's Sepolia test network with a test dollar (tUSD) that
@@ -19,7 +28,17 @@ I run an escrow system like this privately; it has secured over $1M across more 
 code stays private. Holdfast is written from scratch to show how the engine works, with the parts that make
 it a business (mainnet networks, fees and payouts, fraud rules) deliberately left out.
 
-## A trade, start to finish
+## Try it
+
+**[danibapsilva.github.io/holdfast](https://danibapsilva.github.io/holdfast/)** runs a real trade against the demo
+bot in about a minute, with no wallet or install: the payment, the confirmations, and the release are Sepolia
+transactions, each linked on Etherscan.
+
+<p align="center">
+  <a href="https://danibapsilva.github.io/holdfast/"><img src="docs/assets/playground.png" alt="The Holdfast playground: a released trade, its event log, and the state machine under the hood" width="860"></a>
+</p>
+
+## A trade, start to finish (offline)
 
 `python examples/demo_trade.py` runs one on an in-memory chain:
 
@@ -195,11 +214,11 @@ the above plus a secret scan on every push. To run the demo yourself on Sepolia,
 ## Status
 
 1. **Engine**: the state machine, service, Sepolia adapter, tUSD, tests, and CI. Done.
-2. **API and storage**: MongoDB, the HTTP API, the watcher, and hardened systemd units. Done; going live
-   on Sepolia (see [deploy/README.md](deploy/README.md)).
-3. **Web playground**: a chat on [danibapsilva.github.io](https://danibapsilva.github.io) that walks through
-   a trade with the demo bot, every step a real Sepolia transaction you can open on Etherscan.
-4. **Discord bot**: the same engine, in a demo server.
+2. **API and storage**: MongoDB, the HTTP API, the watcher as a worker, tUSD
+   [deployed on Sepolia](https://sepolia.etherscan.io/address/0xD0841FE19d653C0F8E31Ba5c825f23D9ad3aa99b). Done.
+3. **Web playground**: [a chat on danibapsilva.github.io](https://danibapsilva.github.io/holdfast/) that walks through a
+   trade with the demo bot, every step a real Sepolia transaction. Done.
+4. **Discord bot**: the same engine, in a demo server. Next.
 
 ## Security
 
