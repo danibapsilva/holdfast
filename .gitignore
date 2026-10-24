@@ -1,0 +1,25 @@
+# secrets and key material: never committed
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*keystore*
+*mnemonic*
+*seed*.txt
+wallets/
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+
+# compiled contract bytecode (scripts/compile_contract.py writes it; the ABI in the package is committed)
+build/
+
+.DS_Store

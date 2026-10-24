@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans the whole history
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Never mainnet
+        run: python scripts/check_mainnet.py
+      - name: Lint and format
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Contract compiles and its ABI is current
+        run: python scripts/compile_contract.py --check
+      - name: Types
+        run: pyright
+      - name: Tests
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=90
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

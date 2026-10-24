@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "holdfast"
+version = "0.1.0"
+description = "A crypto escrow engine, shown on test networks only."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Daniel Silva" }]
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2.7",
+  "web3>=7",
+  "eth-account>=0.13",
+  "pymongo>=4.10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=5",
+  "ruff>=0.6",
+  "pyright>=1.1.380",
+  "web3[tester]>=7",
+  "py-solc-x>=2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/holdfast"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL", "S", "N", "C4", "PT"]
+ignore = [
+  "PLR2004",  # numbers in tests and limits read better inline
+  "PLR0913",  # keyword-only arguments are the API
+  "S101",     # asserts state invariants
+  "N818",     # IllegalTransition, NotAllowed, WrongNetwork read better than ...Error
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "PLR0911", "PLR0915"]
+"scripts/**" = ["S603", "S607"]
+
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportPrivateUsage = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["holdfast"]
+branch = true
