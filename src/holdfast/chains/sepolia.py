@@ -28,6 +28,7 @@ from holdfast.money import Token
 EXPLORER = "https://sepolia.etherscan.io"
 NATIVE_GAS = 21_000
 ERC20_GAS = 65_000
+MINT_GAS = 90_000
 GAS_HEADROOM = 1.5  # top-ups cover this many times the estimate
 NATIVE_SCAN_BLOCKS = 2_000  # how far back a native ETH scan looks at most
 RECEIPT_TIMEOUT = 180
@@ -43,6 +44,8 @@ def _abi() -> list[dict[str, Any]]:
 
 
 class SepoliaChain:
+    """`Chain` on Sepolia: deposit addresses from the HD wallet, payments from logs, sends signed locally."""
+
     name = "sepolia"
 
     def __init__(
@@ -157,6 +160,9 @@ class SepoliaChain:
             _tx(to=Web3.to_checksum_address(address), value=needed - have, gas=NATIVE_GAS),
         )
 
+    # build_transaction gets nonce=0 only so web3 doesn't look one up: _sign_and_send sets the real one
+    # (from the pending count) just before signing, after re-checking the network.
+
     def send(self, from_index: int, to: str, token: Token, amount: int) -> str:
         account = self.wallet.deposit(from_index)
         recipient = self.normalize_address(to)
@@ -183,7 +189,7 @@ class SepoliaChain:
             .build_transaction(
                 _tx(
                     **{"from": treasury.address},
-                    gas=90_000,
+                    gas=MINT_GAS,
                     gasPrice=self._gas_price(),
                     nonce=0,
                     chainId=self.w3.eth.chain_id,

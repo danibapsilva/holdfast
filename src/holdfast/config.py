@@ -20,14 +20,15 @@ from web3 import Web3
 
 from holdfast.chains.hd import HDWallet
 from holdfast.chains.sepolia import SepoliaChain
+from holdfast.errors import HoldfastError
 from holdfast.guards import Caps
 from holdfast.money import Token, tusd
 from holdfast.service import EscrowService, Policy
 from holdfast.store import MemoryStore, Store
 
 
-class ConfigError(RuntimeError):
-    pass
+class ConfigError(HoldfastError):
+    """A setting is missing or isn't usable."""
 
 
 def _need(name: str) -> str:
@@ -51,7 +52,12 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         def num(name: str, default: int) -> int:
-            return int(os.environ.get(name, default))
+            raw = os.environ.get(name, "").strip()
+            if not raw:
+                return default
+            if not raw.isdigit() or int(raw) <= 0:
+                raise ConfigError(f"{name} must be a whole number above zero, not {raw!r}")
+            return int(raw)
 
         return cls(
             rpc_url=_need("HOLDFAST_RPC_URL"),

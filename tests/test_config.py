@@ -30,3 +30,12 @@ def test_missing_settings_fail_clearly(monkeypatch: pytest.MonkeyPatch, missing:
     monkeypatch.delenv(missing, raising=False)
     with pytest.raises(ConfigError, match=missing):
         Settings.from_env()
+
+
+@pytest.mark.parametrize("bad", ["ten", "-5", "0", "2.5"])
+def test_bad_numbers_fail_clearly(monkeypatch: pytest.MonkeyPatch, bad: str) -> None:
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("HOLDFAST_CONFIRMATIONS", bad)
+    with pytest.raises(ConfigError, match="HOLDFAST_CONFIRMATIONS must be a whole number"):
+        Settings.from_env()

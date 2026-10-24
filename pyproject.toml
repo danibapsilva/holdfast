@@ -33,7 +33,7 @@ packages = ["src/holdfast"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-src = ["src", "tests", "scripts"]
+src = ["src", "tests", "scripts", "examples"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL", "S", "N", "C4", "PT"]
@@ -49,7 +49,7 @@ ignore = [
 "scripts/**" = ["S603", "S607"]
 
 [tool.pyright]
-include = ["src", "tests", "scripts"]
+include = ["src", "tests", "scripts", "examples"]
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.12"

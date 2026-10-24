@@ -12,6 +12,7 @@ payout at its own address when it's the seller.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -23,10 +24,16 @@ from holdfast.money import Token
 from holdfast.store import Store
 
 DEMO_USER = "holdfast-demo"
+BPS = 10_000  # basis points in 100%
+
+log = logging.getLogger(__name__)
+
+# one party's action on a deal: the deal, the caller's role in it, and the time
+Act = Callable[[Deal, Role, dt.datetime], None]
 
 
 class NotFound(DealError):
-    pass
+    """No deal has that id."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +51,8 @@ def utcnow() -> dt.datetime:
 
 
 class EscrowService:
+    """The use cases, over a `Store` and a `Chain`. Stateless between calls: every call reloads the deal."""
+
     def __init__(
         self,
         store: Store,
@@ -78,6 +87,20 @@ class EscrowService:
     def _is_demo(self, deal: Deal) -> bool:
         return DEMO_USER in (deal.buyer_id, deal.seller_id)
 
+    def _act(self, deal_id: str, user: str, act: Act, *, settle: bool = True) -> Deal:
+        """Load the deal, apply one action as `user`'s role in it, save it, and (unless `settle` is off) send
+        the money if that action released or refunded it."""
+        deal = self.get(deal_id)
+        act(deal, self._role(deal, user), self.clock())
+        self.store.save(deal)
+        return self._settle_if_ready(deal) if settle else deal
+
+    @staticmethod
+    def _deposit(deal: Deal) -> str:
+        if not deal.deposit_address:
+            raise DealError("This deal has no deposit address until the terms are accepted")
+        return deal.deposit_address
+
     # ---- making a deal ----
 
     def create_deal(
@@ -101,7 +124,7 @@ class EscrowService:
             creator=creator_role,
             token=self.token,
             amount=amount,
-            fee=amount * self.policy.fee_bps // 10_000,
+            fee=amount * self.policy.fee_bps // BPS,
             description=description.strip(),
             created_at=now,
             required_confirmations=self.policy.required_confirmations,
@@ -110,6 +133,7 @@ class EscrowService:
         )
         deal.propose(by=creator_role, user=creator, now=now)
         self.store.insert(deal)
+        log.info("deal %s created: %s %s, %s units", deal.id, creator_role, creator, amount)
         if counterparty == DEMO_USER:
             self._demo_accept(deal.id)
         return self.get(deal.id)
@@ -121,15 +145,15 @@ class EscrowService:
         )
 
     def accept_terms(self, deal_id: str, user: str) -> Deal:
-        deal = self.get(deal_id)
-        deal.accept_terms(
-            by=self._role(deal, user),
-            user=user,
-            now=self.clock(),
-            deposit_address=self.chain.deposit_address(deal.number),
+        """The other party agrees; the deal gets its own deposit address."""
+        return self._act(
+            deal_id,
+            user,
+            lambda d, role, now: d.accept_terms(
+                by=role, user=user, now=now, deposit_address=self.chain.deposit_address(d.number)
+            ),
+            settle=False,
         )
-        self.store.save(deal)
-        return deal
 
     def _demo_accept(self, deal_id: str) -> None:
         deal = self.accept_terms(deal_id, DEMO_USER)
@@ -138,77 +162,64 @@ class EscrowService:
             self.set_payout_address(deal_id, DEMO_USER, demo)
         else:
             self.set_refund_address(deal_id, DEMO_USER, demo)
-            self.chain.fund_demo(self.get(deal_id).deposit_address or "", self.token, deal.amount)
+            self.chain.fund_demo(self._deposit(deal), self.token, deal.amount)
 
     # ---- the parties' actions ----
 
     def set_payout_address(self, deal_id: str, user: str, address: str) -> Deal:
-        deal = self.get(deal_id)
-        deal.set_payout_address(
-            by=self._role(deal, user), user=user, now=self.clock(), address=self.chain.normalize_address(address)
+        """Where the seller is paid. If the deal was only waiting on this, it settles now."""
+        checked = self.chain.normalize_address(address)
+        return self._act(
+            deal_id, user, lambda d, role, now: d.set_payout_address(by=role, user=user, now=now, address=checked)
         )
-        self.store.save(deal)
-        return self._settle_if_ready(deal)
 
     def set_refund_address(self, deal_id: str, user: str, address: str) -> Deal:
-        deal = self.get(deal_id)
-        deal.set_refund_address(
-            by=self._role(deal, user), user=user, now=self.clock(), address=self.chain.normalize_address(address)
+        """Where the buyer is refunded (and any overpayment returned)."""
+        checked = self.chain.normalize_address(address)
+        return self._act(
+            deal_id, user, lambda d, role, now: d.set_refund_address(by=role, user=user, now=now, address=checked)
         )
-        self.store.save(deal)
-        return self._settle_if_ready(deal)
 
     def demo_pay(self, deal_id: str, user: str) -> str:
         """The web playground's Pay button: for a demo deal's buyer, mint the payment to the deposit address."""
         deal = self.get(deal_id)
         if not self._is_demo(deal) or self._role(deal, user) != Role.BUYER:
             raise DealError("Only the buyer in a demo deal can use the demo payment")
-        if deal.state != State.AWAITING_PAYMENT or not deal.deposit_address:
+        if deal.state != State.AWAITING_PAYMENT:
             raise DealError("This deal isn't waiting for a payment")
-        return self.chain.fund_demo(deal.deposit_address, self.token, deal.amount)
+        return self.chain.fund_demo(self._deposit(deal), self.token, deal.amount)
 
     def cancel(self, deal_id: str, user: str) -> Deal:
-        deal = self.get(deal_id)
-        deal.cancel(by=self._role(deal, user), user=user, now=self.clock())
-        self.store.save(deal)
-        return self._settle_if_ready(deal)
+        return self._act(deal_id, user, lambda d, role, now: d.cancel(by=role, user=user, now=now))
 
     def mark_delivered(self, deal_id: str, user: str) -> Deal:
-        deal = self.get(deal_id)
-        deal.mark_delivered(by=self._role(deal, user), user=user, now=self.clock())
-        self.store.save(deal)
+        deal = self._act(deal_id, user, lambda d, role, now: d.mark_delivered(by=role, user=user, now=now))
         if deal.buyer_id == DEMO_USER:  # the demo bot trusts the delivery and releases
             return self.confirm_delivery(deal_id, DEMO_USER)
         return deal
 
     def confirm_delivery(self, deal_id: str, user: str) -> Deal:
-        deal = self.get(deal_id)
-        deal.confirm_delivery(by=self._role(deal, user), user=user, now=self.clock())
-        self.store.save(deal)
-        return self._settle_if_ready(deal)
+        return self._act(deal_id, user, lambda d, role, now: d.confirm_delivery(by=role, user=user, now=now))
 
     def request_refund(self, deal_id: str, user: str) -> Deal:
-        deal = self.get(deal_id)
-        deal.request_refund(by=self._role(deal, user), user=user, now=self.clock())
-        self.store.save(deal)
-        return self._settle_if_ready(deal)
+        return self._act(deal_id, user, lambda d, role, now: d.request_refund(by=role, user=user, now=now))
 
     def open_dispute(self, deal_id: str, user: str, reason: str) -> Deal:
-        deal = self.get(deal_id)
-        deal.open_dispute(by=self._role(deal, user), user=user, now=self.clock(), reason=reason)
-        self.store.save(deal)
-        return deal
+        return self._act(
+            deal_id, user, lambda d, role, now: d.open_dispute(by=role, user=user, now=now, reason=reason), settle=False
+        )
 
     def respond_dispute(self, deal_id: str, user: str, note: str) -> Deal:
-        deal = self.get(deal_id)
-        deal.respond_dispute(by=self._role(deal, user), user=user, now=self.clock(), note=note)
-        self.store.save(deal)
-        return deal
+        return self._act(
+            deal_id, user, lambda d, role, now: d.respond_dispute(by=role, user=user, now=now, note=note), settle=False
+        )
 
     def resolve_dispute(self, deal_id: str, arbiter: str, winner: Role) -> Deal:
+        """An arbiter decides (they aren't a party, so this doesn't go through `_act`)."""
         deal = self.get(deal_id)
         deal.resolve_dispute(by=Role.ARBITER, user=arbiter, now=self.clock(), winner=winner)
         self.store.save(deal)
+        log.info("deal %s: dispute resolved by %s for the %s", deal.id, arbiter, winner)
         return self._settle_if_ready(deal)
 
     # ---- the watcher ----
@@ -221,10 +232,15 @@ class EscrowService:
         changed = False
         for payment in self.chain.payments_to(deal.deposit_address, deal.token):
             if not self.store.claim_transfer(payment.key, deal.id):
+                log.warning("deal %s: transfer %s already credited to another deal; flagged", deal.id, payment.key)
                 deal.needs_review = True  # credited to another deal already: never count it twice
                 changed = True
                 continue
-            changed |= deal.record_payment(payment, now=self.clock())
+            if deal.record_payment(payment, now=self.clock()):
+                log.info(
+                    "deal %s: %s (%s confirmations) -> %s", deal.id, payment.key, payment.confirmations, deal.state
+                )
+                changed = True
         if changed:
             self.store.save(deal)
         return deal
@@ -264,11 +280,13 @@ class EscrowService:
         self.caps.check_send(total, now)
         deal.begin_payout(now=now)
         self.store.save(deal)  # written down before any money moves
+        log.info("deal %s: settling %s with %d transfer(s), %s units", deal.id, deal.state, len(transfers), total)
         txs: list[str] = []
         try:
             for t in transfers:
                 txs.append(self.chain.send(deal.number, t.to, deal.token, t.amount))
         except ChainError:
+            log.exception("deal %s: a settlement send failed after %d sent; flagged for review", deal.id, len(txs))
             deal.needs_review = True  # some may have gone out: a person checks the chain before retrying
             deal.settle_txs = txs
             self.store.save(deal)
@@ -276,4 +294,5 @@ class EscrowService:
         self.caps.record_send(total, now)
         deal.mark_settled(txs, now=self.clock())
         self.store.save(deal)
+        log.info("deal %s: %s (%s)", deal.id, deal.state, ", ".join(txs))
         return deal

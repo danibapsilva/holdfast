@@ -12,9 +12,10 @@ from __future__ import annotations
 from typing import Protocol
 
 from holdfast.deal import TERMINAL, Deal
+from holdfast.errors import HoldfastError
 
 
-class Conflict(RuntimeError):
+class Conflict(HoldfastError):
     """The deal was changed by someone else since it was loaded; load it again and retry."""
 
 

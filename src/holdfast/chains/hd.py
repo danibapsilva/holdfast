@@ -11,17 +11,21 @@ from __future__ import annotations
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 
+from holdfast.errors import HoldfastError
+
 Account.enable_unaudited_hdwallet_features()
 
 DEPOSIT_PATH = "m/44'/60'/0'/0/{index}"
 TREASURY_PATH = "m/44'/60'/1'/0/0"
 
 
-class SeedError(ValueError):
-    pass
+class SeedError(HoldfastError, ValueError):
+    """The seed phrase is missing words or isn't valid BIP-39."""
 
 
 class HDWallet:
+    """The demo's keys, derived on demand from one seed phrase and cached in memory."""
+
     def __init__(self, seed_phrase: str) -> None:
         words = seed_phrase.split()
         if len(words) not in (12, 15, 18, 21, 24):

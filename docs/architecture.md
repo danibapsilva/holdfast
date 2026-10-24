@@ -100,3 +100,10 @@ of PyMongo's own async API, and one dependency serves both the worker and an asy
 - The Sepolia tests run against py-evm in-process, with the chain id set to Sepolia's and tUSD compiled
   and deployed: payment detection, confirmations, gas top-ups, sends, minting caps, the faucet, and a
   whole demo deal.
+
+## Errors
+
+Every deliberate error descends from `HoldfastError` (`errors.py`): deal rules (`DealError`), the network
+(`ChainError`), the guards (`GuardError`), storage conflicts (`Conflict`), settings (`ConfigError`), amounts
+(`AmountError`), and the seed (`SeedError`). Each message is written to be shown to the person who acted, so
+the API maps the family to a 4xx response and anything else to a logged 500.

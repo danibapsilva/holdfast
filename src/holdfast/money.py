@@ -10,8 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
+from holdfast.errors import HoldfastError
 
-class AmountError(ValueError):
+
+class AmountError(HoldfastError, ValueError):
     """An amount that can't be used: not a number, zero or negative, or more precise than the token."""
 
 

@@ -10,11 +10,13 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field
 
+from holdfast.errors import HoldfastError
+
 SEPOLIA = 11155111
 ALLOWED_CHAIN_IDS: frozenset[int] = frozenset({SEPOLIA})
 
 
-class GuardError(RuntimeError):
+class GuardError(HoldfastError):
     """A guard refused: the wrong network, or over a cap."""
 
 

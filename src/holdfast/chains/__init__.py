@@ -10,10 +10,11 @@ from __future__ import annotations
 from typing import Protocol
 
 from holdfast.deal import Payment
+from holdfast.errors import HoldfastError
 from holdfast.money import Token
 
 
-class ChainError(RuntimeError):
+class ChainError(HoldfastError):
     """The network refused or failed: a send reverted, an RPC was down, an address was bad."""
 
 

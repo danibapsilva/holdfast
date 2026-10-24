@@ -26,8 +26,9 @@ from __future__ import annotations
 import datetime as dt
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from holdfast.errors import HoldfastError
 from holdfast.money import Token
 
 
@@ -79,40 +80,39 @@ class Action(StrEnum):
     MARK_REFUNDED = "mark_refunded"
 
 
-S, R = State, Role
-_PARTIES = frozenset({R.BUYER, R.SELLER})
+_PARTIES = frozenset({Role.BUYER, Role.SELLER})
 _OPEN = frozenset(set(State) - TERMINAL)
 
 # Which states each action may happen in, and who may do it. Anything else is refused.
 TRANSITIONS: dict[Action, tuple[frozenset[State], frozenset[Role]]] = {
-    Action.EDIT_TERMS: (frozenset({S.DRAFT}), _PARTIES),
-    Action.PROPOSE: (frozenset({S.DRAFT}), _PARTIES),
-    Action.ACCEPT_TERMS: (frozenset({S.AWAITING_TERMS_ACCEPTANCE}), _PARTIES),
+    Action.EDIT_TERMS: (frozenset({State.DRAFT}), _PARTIES),
+    Action.PROPOSE: (frozenset({State.DRAFT}), _PARTIES),
+    Action.ACCEPT_TERMS: (frozenset({State.AWAITING_TERMS_ACCEPTANCE}), _PARTIES),
     Action.CANCEL: (
-        frozenset({S.DRAFT, S.AWAITING_TERMS_ACCEPTANCE, S.AWAITING_PAYMENT, S.PARTIALLY_PAID}),
+        frozenset({State.DRAFT, State.AWAITING_TERMS_ACCEPTANCE, State.AWAITING_PAYMENT, State.PARTIALLY_PAID}),
         _PARTIES,
     ),
-    Action.RECORD_PAYMENT: (PAYING, frozenset({R.SYSTEM})),
+    Action.RECORD_PAYMENT: (PAYING, frozenset({Role.SYSTEM})),
     Action.EXPIRE: (
-        frozenset({S.AWAITING_TERMS_ACCEPTANCE, S.AWAITING_PAYMENT, S.PARTIALLY_PAID}),
-        frozenset({R.SYSTEM}),
+        frozenset({State.AWAITING_TERMS_ACCEPTANCE, State.AWAITING_PAYMENT, State.PARTIALLY_PAID}),
+        frozenset({Role.SYSTEM}),
     ),
-    Action.MARK_DELIVERED: (frozenset({S.FUNDED}), frozenset({R.SELLER})),
-    Action.CONFIRM_DELIVERY: (frozenset({S.FUNDED}), frozenset({R.BUYER})),
-    Action.REQUEST_REFUND: (frozenset({S.FUNDED}), frozenset({R.SELLER})),
-    Action.OPEN_DISPUTE: (frozenset({S.FUNDED}), _PARTIES),
-    Action.RESPOND_DISPUTE: (frozenset({S.DISPUTED}), _PARTIES),
-    Action.RESOLVE_DISPUTE: (frozenset({S.DISPUTED}), frozenset({R.ARBITER})),
-    Action.AUTO_SETTLE: (frozenset({S.DISPUTED}), frozenset({R.SYSTEM})),
-    Action.SET_PAYOUT_ADDRESS: (_OPEN, frozenset({R.SELLER})),
-    Action.SET_REFUND_ADDRESS: (_OPEN, frozenset({R.BUYER})),
-    Action.BEGIN_PAYOUT: (frozenset({S.RELEASE_PENDING, S.REFUND_PENDING}), frozenset({R.SYSTEM})),
-    Action.MARK_RELEASED: (frozenset({S.RELEASE_PENDING}), frozenset({R.SYSTEM})),
-    Action.MARK_REFUNDED: (frozenset({S.REFUND_PENDING}), frozenset({R.SYSTEM})),
+    Action.MARK_DELIVERED: (frozenset({State.FUNDED}), frozenset({Role.SELLER})),
+    Action.CONFIRM_DELIVERY: (frozenset({State.FUNDED}), frozenset({Role.BUYER})),
+    Action.REQUEST_REFUND: (frozenset({State.FUNDED}), frozenset({Role.SELLER})),
+    Action.OPEN_DISPUTE: (frozenset({State.FUNDED}), _PARTIES),
+    Action.RESPOND_DISPUTE: (frozenset({State.DISPUTED}), _PARTIES),
+    Action.RESOLVE_DISPUTE: (frozenset({State.DISPUTED}), frozenset({Role.ARBITER})),
+    Action.AUTO_SETTLE: (frozenset({State.DISPUTED}), frozenset({Role.SYSTEM})),
+    Action.SET_PAYOUT_ADDRESS: (_OPEN, frozenset({Role.SELLER})),
+    Action.SET_REFUND_ADDRESS: (_OPEN, frozenset({Role.BUYER})),
+    Action.BEGIN_PAYOUT: (frozenset({State.RELEASE_PENDING, State.REFUND_PENDING}), frozenset({Role.SYSTEM})),
+    Action.MARK_RELEASED: (frozenset({State.RELEASE_PENDING}), frozenset({Role.SYSTEM})),
+    Action.MARK_REFUNDED: (frozenset({State.REFUND_PENDING}), frozenset({Role.SYSTEM})),
 }
 
 
-class DealError(Exception):
+class DealError(HoldfastError):
     """Something the deal can't do. The message is safe to show the person who tried."""
 
 
@@ -135,6 +135,8 @@ class BadPayment(DealError):
 class Payment(BaseModel):
     """One incoming transfer to the deal's deposit address."""
 
+    model_config = ConfigDict(validate_assignment=True)
+
     tx_hash: str
     log_index: int = 0  # an ERC-20 transfer's position in its transaction; 0 for native coin
     amount: int = Field(gt=0)
@@ -146,12 +148,18 @@ class Payment(BaseModel):
         return f"{self.tx_hash.lower()}:{self.log_index}"
 
 
+class TransferPurpose(StrEnum):
+    PAYOUT = "payout"  # the amount less the fee, to the seller
+    EXCESS = "excess"  # anything paid beyond the amount, back to the buyer
+    REFUND = "refund"  # everything received, back to the buyer
+
+
 class Transfer(BaseModel):
     """Money the deal owes someone, once it settles."""
 
     to: str
     amount: int
-    purpose: str  # "payout", "excess", "refund"
+    purpose: TransferPurpose
 
 
 class Event(BaseModel):
@@ -174,6 +182,8 @@ class Dispute(BaseModel):
 
 class Deal(BaseModel):
     """One trade. `amount` is what the buyer pays; the seller gets `amount - fee`."""
+
+    model_config = ConfigDict(validate_assignment=True)  # a change is checked like a new deal is
 
     id: str
     number: int  # derives the deposit address, so every deal gets its own
@@ -239,17 +249,27 @@ class Deal(BaseModel):
         if self.state == State.RELEASE_PENDING:
             if not self.payout_address or (self.excess and not self.refund_address):
                 return None
-            out = [Transfer(to=self.payout_address, amount=self.amount - self.fee, purpose="payout")]
+            out = [Transfer(to=self.payout_address, amount=self.amount - self.fee, purpose=TransferPurpose.PAYOUT)]
             if self.excess:
-                out.append(Transfer(to=self.refund_address or "", amount=self.excess, purpose="excess"))
+                out.append(Transfer(to=self.refund_address or "", amount=self.excess, purpose=TransferPurpose.EXCESS))
             return out
         if self.state == State.REFUND_PENDING:
             if not self.refund_address:
                 return None
-            return [Transfer(to=self.refund_address, amount=self.received, purpose="refund")] if self.received else []
+            return (
+                [Transfer(to=self.refund_address, amount=self.received, purpose=TransferPurpose.REFUND)]
+                if self.received
+                else []
+            )
         return None
 
     # ---- the actions ----
+
+    def _open_dispute(self) -> Dispute:
+        """The dispute a dispute action works on (the transition table already put the deal in DISPUTED)."""
+        if self.dispute is None:
+            raise DealError("This deal has no open dispute")
+        return self.dispute
 
     def _check(self, action: Action, by: Role) -> None:
         states, roles = TRANSITIONS[action]
@@ -383,10 +403,10 @@ class Deal(BaseModel):
     def respond_dispute(self, *, by: Role, user: str, now: dt.datetime, note: str) -> None:
         """The other side answers, so the timer can't settle it by default against them."""
         self._check(Action.RESPOND_DISPUTE, by)
-        assert self.dispute is not None
-        if by == self.dispute.opened_by:
+        dispute = self._open_dispute()
+        if by == dispute.opened_by:
             raise DealError("The other side answers a dispute")
-        self.dispute.responded = True
+        dispute.responded = True
         self._log(Action.RESPOND_DISPUTE, by, user, now, note=note.strip())
 
     def resolve_dispute(self, *, by: Role, user: str, now: dt.datetime, winner: Role) -> None:
@@ -404,8 +424,7 @@ class Deal(BaseModel):
     def _settle_dispute(self, winner: Role, action: Action, by: Role, user: str | None, now: dt.datetime) -> None:
         if winner not in _PARTIES:
             raise DealError("A dispute is won by the buyer or the seller")
-        assert self.dispute is not None
-        self.dispute.winner = winner
+        self._open_dispute().winner = winner
         self.state = State.RELEASE_PENDING if winner == Role.SELLER else State.REFUND_PENDING
         self._log(action, by, user, now, winner=winner.value)
 
