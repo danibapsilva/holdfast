@@ -6,6 +6,9 @@
   Native ETH payments are found by scanning recent blocks for transfers to it (slower; the demo
   defaults to tUSD for that reason).
 - A deposit address that has to send tUSD needs a little ETH for gas: the treasury tops it up first.
+- Gas limits are never hard-coded: every transaction gets the network's own estimate plus a margin, capped.
+  Gas costs change with network upgrades (creating new storage got pricier), and a fixed limit that was
+  enough last year makes every send revert after one.
 """
 
 from __future__ import annotations
@@ -26,10 +29,9 @@ from holdfast.guards import ALLOWED_CHAIN_IDS, require_testnet
 from holdfast.money import Token
 
 EXPLORER = "https://sepolia.etherscan.io"
-NATIVE_GAS = 21_000
-ERC20_GAS = 65_000
-MINT_GAS = 90_000
-GAS_HEADROOM = 1.5  # top-ups cover this many times the estimate
+GAS_LIMIT_MARGIN = 1.25  # a transaction's gas limit: the network's estimate plus a quarter
+MAX_GAS = 1_000_000  # no Holdfast transaction comes near this; a bigger estimate means something is wrong
+TOP_UP_MARGIN = 1.5  # a gas top-up covers this many times the expected cost, for price moves
 NATIVE_SCAN_BLOCKS = 2_000  # how far back a native ETH scan looks at most
 RECEIPT_TIMEOUT = 180
 
@@ -138,46 +140,69 @@ class SepoliaChain:
     def _gas_price(self) -> int:
         return self.w3.eth.gas_price
 
+    def _gas_limit(self, tx: TxParams) -> int:
+        """The network's estimate for `tx`, plus a margin. Refuses what would fail or cost absurdly much."""
+        # priced at zero: the question is how much gas it uses, not whether the sender can pay for it yet
+        # (a deposit address holds no ETH until it's topped up, which needs this number first)
+        probe = _tx(**{**{k: v for k, v in tx.items() if k not in ("gas", "nonce")}, "gasPrice": 0})
+        try:
+            estimate = self.w3.eth.estimate_gas(probe)
+        except Exception as e:  # the node simulated it and it would revert, or the RPC failed
+            raise ChainError(f"The network would refuse this transaction: {str(e)[:200]}") from e
+        limit = int(estimate * GAS_LIMIT_MARGIN)
+        if limit > MAX_GAS:
+            raise ChainError(f"This transaction would need {estimate:,} gas, more than Holdfast allows")
+        return limit
+
     def _sign_and_send(self, account: LocalAccount, tx: TxParams) -> str:
+        """Re-check the network, fill in what's missing (chain, nonce, price, gas), sign, send, and wait."""
         self.check_network()  # every send re-checks the network
         tx["chainId"] = self.w3.eth.chain_id
+        tx["from"] = account.address
         tx["nonce"] = self.w3.eth.get_transaction_count(account.address, "pending")
         if "gasPrice" not in tx:
             tx["gasPrice"] = Wei(self._gas_price())
+        if "gas" not in tx:
+            tx["gas"] = self._gas_limit(tx)
         signed = account.sign_transaction(cast(dict[str, Any], tx))
         try:
             tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
             receipt: TxReceipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=RECEIPT_TIMEOUT)
-        except Exception as e:  # rejected, reverted in simulation, or the RPC failed
+        except Exception as e:  # rejected, or the RPC failed
             raise ChainError(f"The network didn't take the transaction: {str(e)[:200]}") from e
         if receipt["status"] != 1:
             raise ChainError(f"Transaction {tx_hash.to_0x_hex()} reverted")
         return tx_hash.to_0x_hex()
 
     def _top_up_gas(self, address: str, needed: int) -> None:
+        """Send the treasury's ETH to `address` until it holds `needed` wei."""
         have = self.w3.eth.get_balance(Web3.to_checksum_address(address))
         if have >= needed:
             return
-        self._sign_and_send(
-            self.wallet.treasury(),
-            _tx(to=Web3.to_checksum_address(address), value=needed - have, gas=NATIVE_GAS),
-        )
+        self._sign_and_send(self.wallet.treasury(), _tx(to=Web3.to_checksum_address(address), value=needed - have))
 
-    # build_transaction gets nonce=0 only so web3 doesn't look one up: _sign_and_send sets the real one
-    # (from the pending count) just before signing, after re-checking the network.
+    def _call_tx(self, call: Any, sender: str) -> tuple[TxParams, int]:
+        """A contract call as a transaction from `sender`, and its estimated gas limit (set on it)."""
+        tx = _tx(**{"from": sender}, to=call.address, data=call._encode_transaction_data(), value=0)
+        limit = self._gas_limit(tx)
+        tx["gas"] = limit
+        return tx, limit
 
     def send(self, from_index: int, to: str, token: Token, amount: int) -> str:
         account = self.wallet.deposit(from_index)
         recipient = self.normalize_address(to)
         price = self._gas_price()
         if token.native:
-            self._top_up_gas(account.address, amount + int(NATIVE_GAS * price * GAS_HEADROOM))
-            return self._sign_and_send(account, _tx(to=recipient, value=amount, gas=NATIVE_GAS, gasPrice=price))
-        contract = self._token_contract(token)
-        self._top_up_gas(account.address, int(ERC20_GAS * price * GAS_HEADROOM))
-        tx = contract.functions.transfer(recipient, amount).build_transaction(
-            _tx(**{"from": account.address}, gas=ERC20_GAS, gasPrice=price, nonce=0, chainId=self.w3.eth.chain_id)
-        )
+            tx = _tx(**{"from": account.address}, to=recipient, value=amount)
+            limit = self._gas_limit(tx)
+            tx["gas"] = limit
+            self._top_up_gas(account.address, amount + int(limit * price * TOP_UP_MARGIN))
+        else:
+            tx, limit = self._call_tx(
+                self._token_contract(token).functions.transfer(recipient, amount), account.address
+            )
+            self._top_up_gas(account.address, int(limit * price * TOP_UP_MARGIN))
+        tx["gasPrice"] = Wei(price)
         return self._sign_and_send(account, tx)
 
     def fund_demo(self, to: str, token: Token, amount: int) -> str:
@@ -185,18 +210,6 @@ class SepoliaChain:
         treasury = self.wallet.treasury()
         recipient = self.normalize_address(to)
         if token.native:
-            return self._sign_and_send(treasury, _tx(to=recipient, value=amount, gas=NATIVE_GAS))
-        tx = (
-            self._token_contract(token)
-            .functions.mint(recipient, amount)
-            .build_transaction(
-                _tx(
-                    **{"from": treasury.address},
-                    gas=MINT_GAS,
-                    gasPrice=self._gas_price(),
-                    nonce=0,
-                    chainId=self.w3.eth.chain_id,
-                )
-            )
-        )
+            return self._sign_and_send(treasury, _tx(to=recipient, value=amount))
+        tx, _ = self._call_tx(self._token_contract(token).functions.mint(recipient, amount), treasury.address)
         return self._sign_and_send(treasury, tx)
