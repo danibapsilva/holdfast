@@ -42,7 +42,8 @@ class Chain(Protocol):
         ...
 
     def payments_to(self, address: str, token: Token, from_block: int = 0) -> list[Payment]:
-        """Every transfer of `token` into `address` since `from_block`, with its confirmations."""
+        """Every transfer of `token` into `address` since `from_block`, with its confirmations.
+        Raises `ChainError` when the network can't be read (the watcher backs off and tries again)."""
         ...
 
     def send(self, from_index: int, to: str, token: Token, amount: int) -> str:

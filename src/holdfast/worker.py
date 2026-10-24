@@ -58,6 +58,11 @@ class Worker:
         except Conflict:
             log.info("a deal changed while the watcher worked on it; it's picked up on the next pass")
             return self.interval
+        except Exception:  # a bug: log it in full and keep watching, backing off so it can't spin
+            self.failures += 1
+            delay = self.backoff()
+            log.exception("the watcher's pass failed unexpectedly; trying again in %.0fs", delay)
+            return delay
         if self.failures:
             log.info("the network is back after %d failed passes", self.failures)
         self.failures = 0

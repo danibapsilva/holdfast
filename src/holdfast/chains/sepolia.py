@@ -2,7 +2,9 @@
 
 - The network is checked when the adapter starts and again before every send: if the RPC isn't
   Sepolia, nothing happens (`guards.require_testnet`).
-- tUSD payments are found from the token's Transfer logs filtered to the deposit address (cheap).
+- tUSD payments are found from the token's Transfer logs filtered to the deposit address, searched in
+  small block ranges (`log_range`; free RPC plans cap a search at about 10 blocks) and remembered, so each
+  pass only searches the blocks it hasn't seen. Confirmations come from the current block number.
   Native ETH payments are found by scanning recent blocks for transfers to it (slower; the demo
   defaults to tUSD for that reason).
 - A deposit address that has to send tUSD needs a little ETH for gas: the treasury tops it up first.
@@ -14,6 +16,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from importlib import resources
 from typing import Any, cast
 
@@ -34,6 +37,15 @@ MAX_GAS = 1_000_000  # no Holdfast transaction comes near this; a bigger estimat
 TOP_UP_MARGIN = 1.5  # a gas top-up covers this many times the expected cost, for price moves
 NATIVE_SCAN_BLOCKS = 2_000  # how far back a native ETH scan looks at most
 RECEIPT_TIMEOUT = 180
+DEFAULT_LOG_RANGE = 10
+
+
+@dataclass
+class _Found:
+    """What one address's log search has covered, and the transfers it found (by key, with their block)."""
+
+    searched_to: int
+    transfers: dict[str, tuple[Payment, int]] = field(default_factory=dict[str, tuple[Payment, int]])
 
 
 def _tx(**fields: object) -> TxParams:
@@ -56,10 +68,16 @@ class SepoliaChain:
         wallet: HDWallet,
         tusd_address: str | None,
         allowed: frozenset[int] = ALLOWED_CHAIN_IDS,
+        *,
+        log_range: int = DEFAULT_LOG_RANGE,
     ) -> None:
+        if log_range < 1:
+            raise ValueError("log_range is at least one block")
         self.w3 = w3
         self.wallet = wallet
         self.allowed = allowed
+        self.log_range = log_range
+        self._found: dict[str, _Found] = {}  # per deposit address, for this process
         self.tusd: Contract | None = (
             w3.eth.contract(address=Web3.to_checksum_address(tusd_address), abi=_abi()) if tusd_address else None
         )
@@ -74,7 +92,10 @@ class SepoliaChain:
         require_testnet(self.network_id(), self.allowed)
 
     def head(self) -> int:
-        return self.w3.eth.block_number
+        try:
+            return self.w3.eth.block_number
+        except Exception as e:  # the RPC is down or refused
+            raise ChainError(f"Couldn't read the latest block: {str(e)[:200]}") from e
 
     def normalize_address(self, text: str) -> str:
         if not Web3.is_address(text.strip()):
@@ -105,22 +126,37 @@ class SepoliaChain:
     def payments_to(self, address: str, token: Token, from_block: int = 0) -> list[Payment]:
         head = self.head()
         to = Web3.to_checksum_address(address)
-        if token.native:
-            return self._native_payments(to, max(from_block, head - NATIVE_SCAN_BLOCKS), head)
-        logs = (
-            self._token_contract(token)
-            .events.Transfer()
-            .get_logs(argument_filters={"to": to}, from_block=from_block, to_block=head)
-        )
+        try:
+            if token.native:
+                return self._native_payments(to, max(from_block, head - NATIVE_SCAN_BLOCKS), head)
+            return self._token_payments(to, token, from_block, head)
+        except ChainError:
+            raise
+        except Exception as e:  # the RPC refused a search or went away mid-way
+            raise ChainError(f"Couldn't read payments to {to}: {str(e)[:200]}") from e
+
+    def _token_payments(self, to: str, token: Token, from_block: int, head: int) -> list[Payment]:
+        """Transfer logs into `to`, searched from where the last search stopped, `log_range` blocks at a time."""
+        contract = self._token_contract(token)
+        found = self._found.setdefault(f"{token.contract}:{to}", _Found(searched_to=from_block - 1))
+        start = max(from_block, found.searched_to + 1)
+        while start <= head:
+            end = min(start + self.log_range - 1, head)
+            for log in contract.events.Transfer().get_logs(argument_filters={"to": to}, from_block=start, to_block=end):
+                if log["args"]["value"] > 0:
+                    payment = Payment(
+                        tx_hash=log["transactionHash"].to_0x_hex(),
+                        log_index=log["logIndex"],
+                        amount=log["args"]["value"],
+                        confirmations=1,
+                    )
+                    found.transfers[payment.key] = (payment, log["blockNumber"])
+            found.searched_to = end  # only after the range succeeded, so a failure retries it
+            start = end + 1
         return [
-            Payment(
-                tx_hash=log["transactionHash"].to_0x_hex(),
-                log_index=log["logIndex"],
-                amount=log["args"]["value"],
-                confirmations=head - log["blockNumber"] + 1,
-            )
-            for log in logs
-            if log["args"]["value"] > 0
+            payment.model_copy(update={"confirmations": head - block + 1})
+            for payment, block in found.transfers.values()
+            if block >= from_block
         ]
 
     def _native_payments(self, to: str, start: int, head: int) -> list[Payment]:

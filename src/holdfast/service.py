@@ -24,6 +24,7 @@ from holdfast.money import Token
 from holdfast.store import Store
 
 DEMO_USER = "holdfast-demo"
+LOOKBACK_BLOCKS = 1_000  # where to look for an older deal's payments, saved before deals kept their block
 BPS = 10_000  # basis points in 100%
 
 log = logging.getLogger(__name__)
@@ -145,15 +146,15 @@ class EscrowService:
         )
 
     def accept_terms(self, deal_id: str, user: str) -> Deal:
-        """The other party agrees; the deal gets its own deposit address."""
-        return self._act(
-            deal_id,
-            user,
-            lambda d, role, now: d.accept_terms(
-                by=role, user=user, now=now, deposit_address=self.chain.deposit_address(d.number)
-            ),
-            settle=False,
-        )
+        """The other party agrees; the deal gets its own deposit address, and remembers the block it was
+        handed out at, so the watcher only ever looks for its payments from there on."""
+        head = self.chain.head()
+
+        def accept(deal: Deal, role: Role, now: dt.datetime) -> None:
+            deal.accept_terms(by=role, user=user, now=now, deposit_address=self.chain.deposit_address(deal.number))
+            deal.watch_from_block = head
+
+        return self._act(deal_id, user, accept, settle=False)
 
     def _demo_accept(self, deal_id: str) -> None:
         deal = self.accept_terms(deal_id, DEMO_USER)
@@ -229,8 +230,11 @@ class EscrowService:
         deal = self.get(deal_id)
         if not deal.deposit_address:
             return deal
+        start = deal.watch_from_block
+        if start is None:
+            start = max(0, self.chain.head() - LOOKBACK_BLOCKS)
         changed = False
-        for payment in self.chain.payments_to(deal.deposit_address, deal.token):
+        for payment in self.chain.payments_to(deal.deposit_address, deal.token, from_block=start):
             if not self.store.claim_transfer(payment.key, deal.id):
                 log.warning("deal %s: transfer %s already credited to another deal; flagged", deal.id, payment.key)
                 deal.needs_review = True  # credited to another deal already: never count it twice

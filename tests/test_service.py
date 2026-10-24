@@ -269,3 +269,27 @@ def test_demo_pay_needs_an_open_payment(service: EscrowService, chain: FakeChain
 
 def test_default_clock_is_aware() -> None:
     assert utcnow().tzinfo is dt.UTC
+
+
+def test_a_deal_remembers_the_block_its_address_was_handed_out(service: EscrowService, chain: FakeChain) -> None:
+    chain.mine(7)
+    deal = service.create_deal(
+        creator="alice", creator_role=Role.BUYER, counterparty="bob", amount=10 * DOLLAR, description="Art"
+    )
+    deal = service.accept_terms(deal.id, "bob")
+    assert deal.watch_from_block == chain.head()
+
+
+def test_an_older_deal_without_a_block_is_searched_from_a_bounded_lookback(
+    service: EscrowService, chain: FakeChain
+) -> None:
+    deal = service.create_deal(
+        creator="alice", creator_role=Role.BUYER, counterparty="bob", amount=10 * DOLLAR, description="Art"
+    )
+    deal = service.accept_terms(deal.id, "bob")
+    stored = service.get(deal.id)
+    stored.watch_from_block = None
+    service.store.save(stored)
+    chain.pay(deal.deposit_address or "", TUSD, 10 * DOLLAR)
+    chain.mine()
+    assert service.check_payments(deal.id).state == State.FUNDED

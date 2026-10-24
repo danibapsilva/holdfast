@@ -13,6 +13,7 @@ HOLDFAST_PAYMENT_MINUTES      how long a buyer has to pay (default 30)
 HOLDFAST_DISPUTE_MINUTES      how long a dispute waits before the timer settles it (default 10)
 HOLDFAST_PER_DEAL_CAP         most a deal can be, in whole tUSD (default 100)
 HOLDFAST_PER_DAY_CAP          most sent in a day, in whole tUSD (default 2000)
+HOLDFAST_LOG_RANGE            blocks per log search (default 10, the most Alchemy's free plan allows)
 
 Services read these from the process environment; `load_env_file` fills it from a file first, so
 `holdfast-api --env-file ~/.config/holdfast/holdfast.env` works the same as systemd's EnvironmentFile.
@@ -100,6 +101,7 @@ class Settings:
     dispute_minutes: int = 10
     per_deal_cap: int = 100
     per_day_cap: int = 2000
+    log_range: int = 10
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -117,6 +119,7 @@ class Settings:
             dispute_minutes=_number("HOLDFAST_DISPUTE_MINUTES", 10),
             per_deal_cap=_number("HOLDFAST_PER_DEAL_CAP", 100),
             per_day_cap=_number("HOLDFAST_PER_DAY_CAP", 2000),
+            log_range=_number("HOLDFAST_LOG_RANGE", 10),
         )
 
     @property
@@ -141,7 +144,12 @@ class Settings:
 
 def build_service(settings: Settings, store: Store | None = None) -> EscrowService:
     """The service on Sepolia. Refuses to start if the RPC isn't Sepolia."""
-    chain = SepoliaChain(Web3(Web3.HTTPProvider(settings.rpc_url)), HDWallet(settings.seed), settings.tusd_address)
+    chain = SepoliaChain(
+        Web3(Web3.HTTPProvider(settings.rpc_url)),
+        HDWallet(settings.seed),
+        settings.tusd_address,
+        log_range=settings.log_range,
+    )
     return EscrowService(
         store or settings.store(), chain, settings.token, caps=settings.caps(), policy=settings.policy()
     )

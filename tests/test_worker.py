@@ -65,3 +65,14 @@ def test_run_stops_between_passes(service: EscrowService) -> None:
 
     Worker(service, interval=0.01, before_tick=count).run(stop)
     assert passes == [1]
+
+
+def test_a_bug_in_a_pass_is_logged_and_backed_off(service: EscrowService, monkeypatch: pytest.MonkeyPatch) -> None:
+    worker = Worker(service, interval=5, max_backoff=60, jitter=lambda: 1.0)
+
+    def broken() -> list[str]:
+        raise KeyError("a bug")
+
+    monkeypatch.setattr(service, "tick", broken)
+    assert worker.run_once() == 10  # it keeps running, and waits longer
+    assert worker.failures == 1

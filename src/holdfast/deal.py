@@ -204,6 +204,7 @@ class Deal(BaseModel):
     state: State = State.DRAFT
     deadline: dt.datetime | None = None  # to accept the terms, then to pay
     deposit_address: str | None = None
+    watch_from_block: int | None = Field(default=None, ge=0)  # the block its address was handed out at
     payout_address: str | None = None  # the seller's
     refund_address: str | None = None  # the buyer's
     payments: list[Payment] = Field(default_factory=list[Payment])

@@ -15,6 +15,7 @@ import pytest
 from eth_tester import EthereumTester, PyEVMBackend
 from eth_typing import ChecksumAddress, HexStr
 from web3 import EthereumTesterProvider, Web3
+from web3.contract.contract import ContractEvent
 from web3.providers.eth_tester.defaults import API_ENDPOINTS, static_return
 from web3.types import TxParams
 
@@ -205,3 +206,41 @@ def test_a_whole_demo_deal_on_the_evm(env: Env) -> None:
     receipt = env.w3.eth.get_transaction_receipt(HexStr(deal.settle_txs[0]))
     assert receipt["status"] == 1
     assert json.dumps(deal.model_dump(mode="json"))  # the API can send it as is
+
+
+def test_log_search_goes_in_small_ranges_and_only_covers_new_blocks(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    chain = SepoliaChain(env.w3, env.wallet, env.tusd_address, log_range=2)
+    deposit = chain.deposit_address(11)
+    start = chain.head()
+    env.mine(5)
+    chain.fund_demo(deposit, env.token, 3 * DOLLAR)
+    searched: list[tuple[int, int]] = []
+    real = ContractEvent.__dict__["get_logs"]  # web3's own descriptor, called the way web3 calls it
+
+    def spy(self: Any, **kwargs: Any) -> Any:
+        searched.append((kwargs["from_block"], kwargs["to_block"]))
+        return real.__get__(self, type(self))(**kwargs)
+
+    monkeypatch.setattr(ContractEvent, "get_logs", spy)
+    (payment,) = chain.payments_to(deposit, env.token, from_block=start)
+    assert payment.amount == 3 * DOLLAR
+    assert all(end - begin < 2 for begin, end in searched)  # never more than log_range blocks at once
+    first = len(searched)
+    env.mine(3)
+    (again,) = chain.payments_to(deposit, env.token, from_block=start)
+    assert again.confirmations == payment.confirmations + 3  # from the head, no new search for old blocks
+    assert searched[first][0] > searched[first - 1][1]  # the second pass starts where the first stopped
+
+
+def test_an_rpc_failure_reading_payments_is_a_chain_error(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    def refused(self: Any, **kwargs: Any) -> Any:
+        raise ValueError("400 Bad Request")
+
+    monkeypatch.setattr(ContractEvent, "get_logs", refused)
+    with pytest.raises(ChainError, match="Couldn't read payments"):
+        env.chain.payments_to(env.chain.deposit_address(12), env.token)
+
+
+def test_log_range_is_at_least_one_block(env: Env) -> None:
+    with pytest.raises(ValueError, match="at least one block"):
+        SepoliaChain(env.w3, env.wallet, env.tusd_address, log_range=0)
